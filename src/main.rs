@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{fs, io};
 use structopt::StructOpt;
 
@@ -9,44 +9,48 @@ struct Opt {
     crate_dir: PathBuf,
 }
 
+const CARGO_TOML: &str = "Cargo.toml";
+
 fn main() -> Result<(), String> {
     let opt = Opt::from_args();
-    println!("Working on: {:?}", opt.crate_dir);
-
-    let toml = read_and_parse_toml(&opt.crate_dir)
+    eprintln!("Working on: {:?}", opt.crate_dir);
+    let cargo_path = if opt.crate_dir.ends_with(CARGO_TOML) {
+        opt.crate_dir.clone()
+    } else {
+        opt.crate_dir.join(CARGO_TOML)
+    };
+    let toml = read_and_parse_toml(&cargo_path)
         .map_err(|e| format!("{:?}", e))?;
     let table = toml.as_table()
         .ok_or_else(|| "Invalid toml file".to_string())?;
 
     if let Some(deps) = table.get("dependencies") {
-        parse_and_rename_deps(deps)?;
+        parse_and_rename_deps(&cargo_path, deps)?;
     }
 
     if let Some(dev_deps) = table.get("dev-dependencies") {
-        parse_and_rename_deps(dev_deps)?;
+        parse_and_rename_deps(&cargo_path, dev_deps)?;
     }
 
     Ok(())
 }
 
-fn read_and_parse_toml(crate_dir: &PathBuf) -> io::Result<toml::Value> {
+fn read_and_parse_toml(cargo_path: &Path) -> io::Result<toml::Value> {
     use std::io::Read;
-
-    let cargo_path = crate_dir.join("Cargo.toml");
-    println!("Reading Cargo.toml: {:?}", cargo_path);
+    eprintln!("Reading Cargo.toml: {:?}", cargo_path);
     let mut file = fs::File::open(cargo_path)?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
     Ok(toml::from_str(&contents)?)
 }
 
-fn parse_and_rename_deps(val: &toml::Value) -> Result<(), String> {
+fn parse_and_rename_deps(cargo_path: &Path, val: &toml::Value) -> Result<(), String> {
     let deps: Deps = val.clone().try_into()
         .map_err(|e| format!("Unable to parse deps: {:?}", e))?;
 
-    println!("Deps: {:?}", deps);
+    eprintln!("Deps: {:?}", deps);
 
-    let to_rename = deps
+    let to_rename = deps.0
         .into_iter()
         .filter_map(|(k, v)| if let Dependency::Detailed(d) = v {
             d.package.map(|p| (k, p))
@@ -54,21 +58,43 @@ fn parse_and_rename_deps(val: &toml::Value) -> Result<(), String> {
             None
         });
 
-    let cargo_path = "Cargo.toml";
+    let src_path = cargo_path
+        .parent()
+        .expect("Parent present, since we have Cargo.toml at the end.")
+        .join("src");
+    let src_path_display = src_path.display();
+    let cargo_path_display = cargo_path.display();
+
+    println!("set -xeu");
     for (k, v) in to_rename {
         // toml file
         println!(
-            "sed -i \"s~{} = ~{} = ~\" {}",
-            k, v, cargo_path
+            "sed -i \"s~^{}[ ]*=[ ]*~{} = ~\" {}",
+            k, v, cargo_path_display
         );
         println!(
-            "sed -i \"s~package = \\\"{}\\\",~~\" {}",
-            v, cargo_path
-        );  
+            "sed -i \"s~package[ ]*=[ ]*\\\"{}\\\"[,]*[ ]*~~\" {}",
+            v, cargo_path_display
+        );
+        // std requirement
+        println!(
+            "sed -i \"s~\\\"{}/std\\\"~\\\"{}/std\\\"~\" {}",
+            k, v, cargo_path_display
+        );
+        // optional crates
+        println!(
+            "sed -i \"s~\\\"{}\\\",~\\\"{}\\\",~\" {}",
+            k, v, cargo_path_display
+        );
+
         // rust files
         println!(
-            "find -name \"*.rs\" ./src | xargs sed -i \"s~{}~{}~\"",
-            to_module_name(&k), to_module_name(&v), 
+            "find {} -name \"*.rs\" | xargs sed -i \"s~{}::~{}::~g\"",
+            src_path_display, to_module_name(&k), to_module_name(&v), 
+        );
+        println!(
+            "find {} -name \"*.rs\" | xargs sed -i \"s~use {}~use {}~g\"",
+            src_path_display, to_module_name(&k), to_module_name(&v), 
         );
     }
 

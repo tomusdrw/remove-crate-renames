@@ -1,5 +1,5 @@
 [package]
-name = "crate-rename"
+name = "remove-crate-renames"
 description = "Remove crate aliasing from `Cargo.toml`."
 version = "0.1.0"
 authors = ["Tomasz Drwięga <tomusdrw@gmail.com>"]

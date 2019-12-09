@@ -66,6 +66,7 @@ fn parse_and_rename_deps(cargo_path: &Path, val: &toml::Value) -> Result<(), Str
     let cargo_path_display = cargo_path.display();
 
     println!("set -xeu");
+    println!("echo \"{}\"", cargo_path_display);
     for (k, v) in to_rename {
         // toml file
         println!(
